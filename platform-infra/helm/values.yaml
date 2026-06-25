@@ -1,0 +1,10 @@
+mlflow:
+  enabled: true
+  replicas: 1
+
+kserve:
+  enabled: true
+
+iceberg:
+  enabled: true
+  catalog: nessie
