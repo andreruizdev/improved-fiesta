@@ -3,17 +3,20 @@ server:
 
 spring:
   application:
-    name: loan-producer-service
+    name: ingestion-producer-service
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:fiesta}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:foundry}
     username: ${DB_USER:postgres}
     password: ${DB_PASSWORD:postgres}
   jpa:
     hibernate:
-      ddl-auto: update
+      # CRITICAL BEST PRACTICE: Never use 'update' or 'create-drop' in production.
+      # Database schemas must be altered via versioned migrations (Flyway/Liquibase).
+      ddl-auto: validate
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
-        format_sql: true
+        format_sql: false
 
+# Leverage Virtual Threads to process high-throughput concurrent I/O requests without thread exhaustion
 spring.threads.virtual.enabled: true

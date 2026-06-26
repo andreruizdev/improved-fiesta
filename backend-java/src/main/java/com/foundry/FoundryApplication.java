@@ -1,11 +1,11 @@
-package com.fiesta;
+package com.foundry;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class FiestaApplication {
+public class FoundryApplication {
     public static void main(String[] args) {
-        SpringApplication.run(FiestaApplication.class, args);
+        SpringApplication.run(FoundryApplication.class, args);
     }
 }
