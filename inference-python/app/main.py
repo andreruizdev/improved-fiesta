@@ -4,6 +4,7 @@ import asyncio
 import logging
 from fastapi import FastAPI, BackgroundTasks
 import redis
+import redis.asyncio as redis_async
 from confluent_kafka import Consumer, KafkaError
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -19,6 +20,10 @@ app = FastAPI(title="Risk Inference Service")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+
+# Async Redis for performance-critical path
+async_redis_pool = redis_async.ConnectionPool(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True, max_connections=100)
+async_redis_client = redis_async.Redis(connection_pool=async_redis_pool)
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
 kafka_conf = {
@@ -63,12 +68,12 @@ async def process_kafka_messages():
             with tracer.start_as_current_span("process_loan_event", context=ctx) as span:
                 span.set_attribute("event_id", event_id)
                 
-                if not redis_client.setnx(f"processed_event:{event_id}", "1"):
+                if not await async_redis_client.setnx(f"processed_event:{event_id}", "1"):
                     logger.info(f"Event {event_id} already processed. Skipping.")
                     span.set_attribute("idempotency_skip", True)
                     continue
                 
-                redis_client.expire(f"processed_event:{event_id}", 604800)
+                await async_redis_client.expire(f"processed_event:{event_id}", 604800)
 
                 try:
                     loan_app = LoanApplicationSchema.from_outbox_json(payload_str)
@@ -81,7 +86,7 @@ async def process_kafka_messages():
                 except Exception as e:
                     logger.error(f"Failed to process event {event_id}: {e}")
                     span.record_exception(e)
-                    redis_client.delete(f"processed_event:{event_id}")
+                    await async_redis_client.delete(f"processed_event:{event_id}")
 
     finally:
         consumer.close()
