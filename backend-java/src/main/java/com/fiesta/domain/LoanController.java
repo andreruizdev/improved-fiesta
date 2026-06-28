@@ -1,5 +1,6 @@
 package com.fiesta.domain;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -14,7 +15,12 @@ public class LoanController {
     private final LoanService loanService;
 
     @PostMapping
-    public ResponseEntity<LoanApplication> submit(@RequestBody LoanApplication application) {
+    public ResponseEntity<LoanApplication> submit(@Valid @RequestBody LoanApplicationRequest request) {
+        LoanApplication application = new LoanApplication();
+        application.setApplicantId(request.getApplicantId());
+        application.setAmount(request.getAmount());
+        application.setTermMonths(request.getTermMonths());
+
         return ResponseEntity.ok(loanService.submitApplication(application));
     }
 }
