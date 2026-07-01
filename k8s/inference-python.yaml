@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-python
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: inference-python
+  template:
+    metadata:
+      labels:
+        app: inference-python
+    spec:
+      containers:
+      - name: inference-python
+        image: ghcr.io/your-org/inference-python:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - secretRef:
+            name: jwt-secret
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-python
+spec:
+  selector:
+    app: inference-python
+  ports:
+  - port: 80
+    targetPort: 8000
