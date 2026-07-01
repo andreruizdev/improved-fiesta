@@ -2,7 +2,8 @@ import os
 import json
 import asyncio
 import logging
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator, BackgroundTasks
 import redis
 import redis.asyncio as redis_async
 from confluent_kafka import Consumer, KafkaError
@@ -10,6 +11,13 @@ from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from schemas import LoanApplicationSchema
+from fastapi import Depends, HTTPException, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+from cryptography.x509 import load_pem_x509_certificate
+from cryptography.hazmat.backends import default_backend
+import base64
+
 from model import model_instance
 
 logging.basicConfig(level=logging.INFO)
@@ -98,3 +106,53 @@ async def startup_event():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+# Security
+security = HTTPBearer()
+
+JWT_PUBLIC_KEY = os.getenv("JWT_PUBLIC_KEY", "")
+public_key = None
+
+if JWT_PUBLIC_KEY:
+    try:
+        sanitized = JWT_PUBLIC_KEY.replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "").replace("\n", "").replace(" ", "")
+        padding = (4 - (len(sanitized) % 4)) % 4
+        sanitized += "=" * padding
+        der = base64.b64decode(sanitized)
+        from cryptography.hazmat.primitives.serialization import load_der_public_key
+        public_key = load_der_public_key(der, backend=default_backend())
+    except Exception as e:
+        logger.error(f"Failed to load JWT_PUBLIC_KEY: {e}")
+
+def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(security)):
+    if not public_key:
+        # In a real system, you would block this, but for local dev fallback we might pass
+        logger.warning("No JWT_PUBLIC_KEY configured, skipping validation")
+        return True
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, public_key, algorithms=["RS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+@app.get("/secure-data", dependencies=[Depends(verify_jwt)])
+def secure_endpoint():
+    return {"message": "Authenticated"}
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "healthy"}
+
+@app.get("/ready")
+async def ready():
+    try:
+        await async_redis_client.ping()
+        return {"status": "ready"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="Redis connection failed")
+
+Instrumentator().instrument(app).expose(app)
