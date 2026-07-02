@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, validator
 import json
 
 class LoanApplicationSchema(BaseModel):
@@ -8,7 +8,7 @@ class LoanApplicationSchema(BaseModel):
     termMonths: int = Field(..., gt=0, description="Term must be strictly positive")
     status: str
     
-    @field_validator('amount')
+    @validator('amount')
     def amount_must_be_reasonable(cls, v):
         if v > 10000000:
             raise ValueError("Amount exceeds maximum allowed limit")
