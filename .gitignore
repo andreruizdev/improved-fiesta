@@ -1,3 +1,4 @@
 
 backend-java/.gradle/
 backend-java/build/
+inference-python/**/__pycache__/
