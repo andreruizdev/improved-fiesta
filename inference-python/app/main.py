@@ -8,7 +8,10 @@ import redis
 import redis.asyncio as redis_async
 from confluent_kafka import Consumer, KafkaError
 from opentelemetry import trace
+
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
 
 from schemas import LoanApplicationSchema
 from fastapi import Depends, HTTPException, Security
@@ -40,7 +43,13 @@ kafka_conf = {
     'auto.offset.reset': 'earliest'
 }
 
+
 tracer = trace.get_tracer(__name__)
+
+# Executors for offloading CPU-bound and I/O-bound tasks
+CPU_EXECUTOR = ProcessPoolExecutor(max_workers=os.cpu_count() or 4)
+IO_EXECUTOR = ThreadPoolExecutor(max_workers=10)
+
 
 async def process_kafka_messages():
     consumer = Consumer(kafka_conf)
@@ -83,25 +92,67 @@ async def process_kafka_messages():
                 
                 await async_redis_client.expire(f"processed_event:{event_id}", 604800)
 
-                try:
-                    loan_app = LoanApplicationSchema.from_outbox_json(payload_str)
-                    prob, shap_vals = model_instance.predict(loan_app.amount, loan_app.termMonths)
-                    
-                    logger.info(f"Processed loan {loan_app.id}: Default Prob={prob:.4f}")
-                    span.set_attribute("loan_id", loan_app.id)
-                    span.set_attribute("default_probability", prob)
-                    
-                except Exception as e:
-                    logger.error(f"Failed to process event {event_id}: {e}")
-                    span.record_exception(e)
-                    await async_redis_client.delete(f"processed_event:{event_id}")
+                max_retries = 3
+                retry_count = 0
+                success = False
+                loop = asyncio.get_running_loop()
+
+                while retry_count < max_retries and not success:
+                    try:
+                        # Offload JSON parsing/deserialization to ThreadPool (I/O & Light CPU)
+                        loan_app = await loop.run_in_executor(
+                            IO_EXECUTOR,
+                            LoanApplicationSchema.from_outbox_json,
+                            payload_str
+                        )
+
+                        # Offload heavy ML Prediction to ProcessPool
+                        prob, shap_vals = await loop.run_in_executor(
+                            CPU_EXECUTOR,
+                            model_instance.predict,
+                            loan_app.amount,
+                            loan_app.termMonths
+                        )
+
+                        # Secure Logging: Omit PII such as raw amounts. Mask the ID slightly if needed,
+                        # but standard EU practices would mask exact financials or sensitive IDs from plain logs.
+                        # For now we'll redact the exact amount and just log a generic success with probability.
+                        masked_id = loan_app.id[:4] + "***" if loan_app.id else "unknown"
+                        logger.info(f"Processed loan {masked_id}: Default Prob={prob:.4f}")
+
+                        # Set spans securely (OpenTelemetry can be configured to drop these if needed centrally)
+                        span.set_attribute("loan_id", masked_id)
+                        span.set_attribute("default_probability", prob)
+
+                        success = True
+                    except Exception as e:
+                        retry_count += 1
+                        logger.warning(f"Attempt {retry_count} failed for event {event_id}: {e}")
+                        if retry_count < max_retries:
+                            await asyncio.sleep(0.5 * retry_count)  # Exponential backoff
+                        else:
+                            logger.error(f"Failed to process event {event_id} after {max_retries} attempts: {e}")
+                            span.record_exception(e)
+                            # Remove idempotency key to allow processing later
+                            await async_redis_client.delete(f"processed_event:{event_id}")
+                            break
+
+                if not success:
+                    continue
 
     finally:
         consumer.close()
 
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(process_kafka_messages())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    CPU_EXECUTOR.shutdown(wait=True)
+    IO_EXECUTOR.shutdown(wait=True)
+
 
 @app.get("/health")
 def health_check():
