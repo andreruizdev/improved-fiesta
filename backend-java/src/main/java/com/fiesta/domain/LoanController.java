@@ -15,12 +15,23 @@ public class LoanController {
     private final LoanService loanService;
 
     @PostMapping
-    public ResponseEntity<LoanApplication> submit(@Valid @RequestBody LoanApplicationRequest request) {
+    public ResponseEntity<LoanApplicationResponse> submit(@Valid @RequestBody LoanApplicationRequest request) {
         LoanApplication application = new LoanApplication();
         application.setApplicantId(request.getApplicantId());
         application.setAmount(request.getAmount());
         application.setTermMonths(request.getTermMonths());
 
-        return ResponseEntity.ok(loanService.submitApplication(application));
+        LoanApplication savedApp = loanService.submitApplication(application);
+
+        LoanApplicationResponse response = LoanApplicationResponse.builder()
+                .id(savedApp.getId())
+                .applicantId(savedApp.getApplicantId())
+                .amount(savedApp.getAmount())
+                .termMonths(savedApp.getTermMonths())
+                .status(savedApp.getStatus())
+                .createdAt(savedApp.getCreatedAt())
+                .build();
+
+        return ResponseEntity.ok(response);
     }
 }
